@@ -1,0 +1,14 @@
+[Unit]
+Description=Bridge Logitech G733 wheel events to desktop volume
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/logi-g733-wheel-bridge.env
+ExecStart=%h/.local/bin/logi-g733-wheel-bridge --verbose
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
