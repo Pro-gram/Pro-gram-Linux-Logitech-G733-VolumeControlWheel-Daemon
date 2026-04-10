@@ -1,6 +1,6 @@
-# Linux Logi-G733-Daemon-Audio-Wheel
+# ARCH Linux Logi-G733-Daemon-Audio-Wheel
 
-Linux daemon for restoring the Logitech G733 headset wheel as a system volume control.
+Arch Linux daemon for restoring the Logitech G733 headset wheel as a system volume control.
 
 ## What `install.sh` Does
 
