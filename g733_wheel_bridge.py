@@ -23,6 +23,7 @@ KEY_MUTE = 113
 KEY_VOLUMEDOWN = 114
 KEY_VOLUMEUP = 115
 DEFAULT_STEP = 0.08
+DEFAULT_HANDLE_MUTE = False
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
 
@@ -88,6 +89,7 @@ class AudioController:
     backend_name = "base"
     binary_name = ""
     default_sink = ""
+    default_source = ""
 
     def __init__(self, step: float, sink: str | None = None, binary_path: str | None = None) -> None:
         self.step = step
@@ -131,11 +133,18 @@ class AudioController:
     def toggle_mute(self) -> None:
         raise NotImplementedError
 
+    def toggle_source_mute(self, source: str | None = None) -> None:
+        raise NotImplementedError
+
+    def set_source_mute(self, muted: bool, source: str | None = None) -> None:
+        raise NotImplementedError
+
 
 class WpctlController(AudioController):
     backend_name = "wpctl"
     binary_name = "wpctl"
     default_sink = "@DEFAULT_AUDIO_SINK@"
+    default_source = "@DEFAULT_AUDIO_SOURCE@"
 
     @classmethod
     def _probe(cls, binary_path: str, sink: str) -> bool:
@@ -150,11 +159,18 @@ class WpctlController(AudioController):
     def toggle_mute(self) -> None:
         self._run(self.binary_path, "set-mute", self.sink, "toggle")
 
+    def toggle_source_mute(self, source: str | None = None) -> None:
+        self._run(self.binary_path, "set-mute", source or self.default_source, "toggle")
+
+    def set_source_mute(self, muted: bool, source: str | None = None) -> None:
+        self._run(self.binary_path, "set-mute", source or self.default_source, "1" if muted else "0")
+
 
 class PactlController(AudioController):
     backend_name = "pactl"
     binary_name = "pactl"
     default_sink = "@DEFAULT_SINK@"
+    default_source = "@DEFAULT_SOURCE@"
 
     @classmethod
     def _probe(cls, binary_path: str, sink: str) -> bool:
@@ -168,6 +184,12 @@ class PactlController(AudioController):
 
     def toggle_mute(self) -> None:
         self._run(self.binary_path, "set-sink-mute", self.sink, "toggle")
+
+    def toggle_source_mute(self, source: str | None = None) -> None:
+        self._run(self.binary_path, "set-source-mute", source or self.default_source, "toggle")
+
+    def set_source_mute(self, muted: bool, source: str | None = None) -> None:
+        self._run(self.binary_path, "set-source-mute", source or self.default_source, "1" if muted else "0")
 
 
 CONTROLLERS: dict[str, type[AudioController]] = {
@@ -197,16 +219,41 @@ def create_controller(backend: str, step: float, sink: str | None) -> AudioContr
     )
 
 
+def create_source_controller(backend: str, step: float, source: str | None) -> AudioController:
+    if backend != "auto":
+        controller_class = CONTROLLERS[backend]
+        binary_path = controller_class.resolve_binary()
+        probe_target = source or controller_class.default_source
+        if not controller_class._probe(binary_path, probe_target):
+            raise RuntimeError(
+                f"{controller_class.binary_name} is installed but could not control "
+                f"{probe_target!r}."
+            )
+        return controller_class(step=step, binary_path=binary_path)
+
+    for controller_class in (WpctlController, PactlController):
+        probe_target = source or controller_class.default_source
+        if controller_class.probe(sink=probe_target):
+            return controller_class(step=step)
+
+    raise FileNotFoundError(
+        "Could not find a working audio backend for source mute control. Install PipeWire's 'wpctl' "
+        "or PulseAudio's 'pactl', or pass --backend explicitly."
+    )
+
+
 class G733WheelBridge:
     def __init__(
         self,
         event_path: Path,
         controller: AudioController | None,
+        handle_mute: bool = DEFAULT_HANDLE_MUTE,
         grab: bool = False,
         verbose: bool = False,
     ) -> None:
         self.event_path = event_path
         self.controller = controller
+        self.handle_mute = handle_mute
         self.grab = grab
         self.verbose = verbose
         self._running = True
@@ -221,7 +268,7 @@ class G733WheelBridge:
                 if self.verbose:
                     print(
                         f"Listening on {self.event_path} with backend={self.controller.backend_name} "
-                        f"sink={self.controller.sink}",
+                        f"sink={self.controller.sink} handle_mute={self.handle_mute}",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -271,7 +318,7 @@ class G733WheelBridge:
             self.controller.volume_up()
         elif event.code == KEY_VOLUMEDOWN:
             self.controller.volume_down()
-        elif event.code == KEY_MUTE:
+        elif event.code == KEY_MUTE and self.handle_mute:
             self.controller.toggle_mute()
 
     def _read_event(self, device) -> InputEvent | None:
@@ -315,9 +362,11 @@ def build_parser() -> argparse.ArgumentParser:
     default_event = read_env_text("EVENT")
     default_backend = read_env_choice("BACKEND", "auto", {"auto", *CONTROLLERS})
     default_step = read_env_float("STEP", DEFAULT_STEP)
+    default_handle_mute = read_env_bool("HANDLE_MUTE", DEFAULT_HANDLE_MUTE)
     default_grab = read_env_bool("GRAB", False)
     default_device_name = read_env_text("DEVICE_NAME", DEVICE_NAME) or DEVICE_NAME
     default_sink = read_env_text("SINK")
+    default_source = read_env_text("SOURCE")
 
     parser = argparse.ArgumentParser(
         description="Listen to the Logitech G733 wheel and forward it to desktop volume controls."
@@ -350,6 +399,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=default_sink,
         help="Explicit sink name or ID. Defaults to the backend's default audio sink token.",
     )
+    parser.add_argument(
+        "--source",
+        default=default_source,
+        help="Explicit source name or ID for one-shot mic mute commands.",
+    )
+    mute_group = parser.add_mutually_exclusive_group()
+    mute_group.add_argument(
+        "--handle-mute",
+        action="store_true",
+        default=default_handle_mute,
+        help="Also translate the headset mute key into a desktop sink mute toggle.",
+    )
+    mute_group.add_argument(
+        "--ignore-mute",
+        action="store_false",
+        dest="handle_mute",
+        help="Ignore the headset mute key. This is the default behavior.",
+    )
     grab_group = parser.add_mutually_exclusive_group()
     grab_group.add_argument(
         "--grab",
@@ -368,6 +435,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print raw input events instead of changing volume.",
     )
+    action_group = parser.add_mutually_exclusive_group()
+    action_group.add_argument(
+        "--toggle-mic-mute",
+        action="store_true",
+        help="Toggle mute on the default audio input source and exit. Useful for desktop keybinds.",
+    )
+    action_group.add_argument(
+        "--mute-mic",
+        action="store_true",
+        help="Mute the default audio input source and exit.",
+    )
+    action_group.add_argument(
+        "--unmute-mic",
+        action="store_true",
+        help="Unmute the default audio input source and exit.",
+    )
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -382,6 +465,23 @@ def main() -> int:
 
     if args.step <= 0:
         parser.error("--step must be greater than 0.")
+
+    if args.toggle_mic_mute or args.mute_mic or args.unmute_mic:
+        try:
+            controller = create_source_controller(backend=args.backend, step=args.step, source=args.source)
+            if args.toggle_mic_mute:
+                controller.toggle_source_mute(args.source)
+            elif args.mute_mic:
+                controller.set_source_mute(True, args.source)
+            else:
+                controller.set_source_mute(False, args.source)
+            return 0
+        except subprocess.CalledProcessError as exc:
+            print(f"Audio control command failed: {exc}", file=sys.stderr)
+            return exc.returncode or 1
+        except (PermissionError, FileNotFoundError, RuntimeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     event_path = args.event or find_event_device(args.device_name)
 
@@ -399,6 +499,7 @@ def main() -> int:
             bridge = G733WheelBridge(
                 event_path=event_path,
                 controller=None,
+                handle_mute=args.handle_mute,
                 grab=args.grab,
                 verbose=args.verbose,
             )
@@ -408,6 +509,7 @@ def main() -> int:
         bridge = G733WheelBridge(
             event_path=event_path,
             controller=controller,
+            handle_mute=args.handle_mute,
             grab=args.grab,
             verbose=args.verbose,
         )
