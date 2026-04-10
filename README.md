@@ -4,7 +4,7 @@ Linux daemon for restoring the Logitech G733 headset wheel as a system volume co
 
 ## What `install.sh` Does
 
-For a normal user, `bash ./install.sh` will do four things:
+cd'd inside this repo, `bash ./install.sh` will do four things:
 
 - It installs the daemon script into `~/.local/share/logi-g733-wheel-bridge/` and creates a launcher at `~/.local/bin/logi-g733-wheel-bridge` so the service has a stable executable path. See `install.sh`.
 - It installs the user service into `~/.config/systemd/user/g733-wheel-bridge.service`. That service runs the launcher and reads optional settings from `~/.config/logi-g733-wheel-bridge.env`. See `systemd/g733-wheel-bridge.service`.
