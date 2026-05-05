@@ -1,5 +1,5 @@
 ACTION!="add|change", GOTO="logi_g733_wheel_end"
 SUBSYSTEM!="input", GOTO="logi_g733_wheel_end"
 KERNEL!="event*", GOTO="logi_g733_wheel_end"
-ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0afe", ATTRS{name}=="Logitech G733 Gaming Headset Consumer Control", TAG+="uaccess"
+ATTRS{id/vendor}=="046d", ATTRS{id/product}=="0afe", ATTRS{name}=="Logitech G733 Gaming Headset Consumer Control", TAG+="uaccess"
 LABEL="logi_g733_wheel_end"

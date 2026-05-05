@@ -83,6 +83,7 @@ if [ "${INSTALL_UDEV}" -eq 1 ]; then
 fi
 
 if [ "${START_SERVICE}" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
+  systemctl --user reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
   if systemctl --user daemon-reload && systemctl --user enable --now "${SERVICE_NAME}"; then
     printf '%s\n' "Installed and started ${SERVICE_NAME}."
   else

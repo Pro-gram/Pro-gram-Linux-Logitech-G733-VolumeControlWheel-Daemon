@@ -1,87 +1,102 @@
-# ARCH Linux Logi-G733-Daemon-Audio-Wheel
+# Logitech G733 Wheel Bridge
 
-Arch Linux daemon for restoring the Logitech G733 headset wheel as a system volume control.
+Linux user service for making the Logitech G733 headset wheel control system volume.
 
-## What `install.sh` Does
+The daemon listens to the G733 headset wheel and sends volume changes to PipeWire
+or PulseAudio. It is intended for Arch Linux, but should work on similar
+systemd-based desktop Linux setups.
 
-cd'd inside this repo, `bash ./install.sh` will do four things:
+## Requirements
 
-- It installs the daemon script into `~/.local/share/logi-g733-wheel-bridge/` and creates a launcher at `~/.local/bin/logi-g733-wheel-bridge` so the service has a stable executable path. See `install.sh`.
-- It installs the user service into `~/.config/systemd/user/g733-wheel-bridge.service`. That service runs the launcher and reads optional settings from `~/.config/logi-g733-wheel-bridge.env`. See `systemd/g733-wheel-bridge.service`.
-- It creates `~/.config/logi-g733-wheel-bridge.env` only if that file does not already exist, so it will not overwrite the user's tuning. The example values live in `config/logi-g733-wheel-bridge.env.example`.
-- By default, it runs `systemctl --user daemon-reload` and `systemctl --user enable --now g733-wheel-bridge.service`, so the daemon starts immediately and comes back on login. That behavior is in `install.sh`.
+- Logitech G733 headset connected
+- `python3`
+- PipeWire's `wpctl` or PulseAudio's `pactl`
+- `systemctl --user`
 
-If a user runs `bash ./install.sh --udev`, it also installs the udev rule in `/etc/udev/rules.d/70-logi-g733-wheel.rules`, reloads rules, and triggers input devices so access to the G733 event node works more reliably without adding the user to the `input` group. See `udev/70-logi-g733-wheel.rules`.
+## Install
 
-What it does not do:
-
-- It does not install Python, `wpctl`, or `pactl`.
-- It does not overwrite an existing config file.
-- It does not need root unless `--udev` is used.
-
-## Quick Install
-
-```bash
-bash ./install.sh
-```
-
-If the user hits input-permission issues:
+Run this from the cloned repository directory:
 
 ```bash
 bash ./install.sh --udev
 ```
 
-============================
+`--udev` is recommended because the headset wheel is exposed as an input device,
+and normal users usually need a udev rule to read it.
 
-## What the Daemon Does
+The installer creates:
 
-The daemon listens to the Logitech G733 consumer-control input device and restores the wheel as a desktop volume control.
+- `~/.local/bin/logi-g733-wheel-bridge`
+- `~/.config/systemd/user/g733-wheel-bridge.service`
+- `~/.config/logi-g733-wheel-bridge.env`
 
-Specifically, it does this:
+It also starts the service immediately and enables it for future logins.
 
-- Auto-detects the `Logitech G733 Gaming Headset Consumer Control` event device instead of assuming a fixed `/dev/input/eventX`.
-- Opens the headset input stream and listens for `KEY_VOLUMEUP`, `KEY_VOLUMEDOWN`, and `KEY_MUTE`.
-- Maps wheel notches to system volume changes.
-- Ignores the headset mute key by default so it does not interfere with the button's existing behavior.
-- Can optionally map the headset mute key to sink mute if a user starts it with `--handle-mute` or sets `G733_WHEEL_HANDLE_MUTE=true`.
-- Also exposes one-shot mic mute commands for desktop keybinds, so users can bind keyboard or mouse buttons without changing the headset button itself.
-- Prefers PipeWire through `wpctl` and falls back to PulseAudio through `pactl`.
-- Supports a `--probe` mode so a user can verify the wheel is sending events before troubleshooting the audio backend.
-- Supports config overrides through `~/.config/logi-g733-wheel-bridge.env` for things like step size, backend, sink, explicit event path, device name, and exclusive grab mode.
-- Runs well as a user-level `systemd` service so it starts on login and stays in the background.
-
-## Manual Run
-
-Probe raw events:
+## Check Status
 
 ```bash
-python3 ./g733_wheel_bridge.py --probe
+systemctl --user status g733-wheel-bridge.service --no-pager
 ```
 
-Run the daemon manually:
+If it is working, the service should show `active (running)`.
+
+## Adjust Sensitivity
+
+Edit:
 
 ```bash
-python3 ./g733_wheel_bridge.py
+~/.config/logi-g733-wheel-bridge.env
 ```
 
-Useful examples:
+Recommended default:
+
+```text
+G733_WHEEL_STEP=0.02
+G733_WHEEL_MIN_INTERVAL_MS=40
+```
+
+`G733_WHEEL_STEP` is the volume change per accepted wheel event. `0.02` means
+2%. Increase it if the wheel feels too slow.
+
+`G733_WHEEL_MIN_INTERVAL_MS` smooths out bursty wheel events. Increase it if one
+small wheel movement feels like multiple jumps.
+
+Restart after changing settings:
 
 ```bash
-python3 ./g733_wheel_bridge.py --step 0.10
-python3 ./g733_wheel_bridge.py --backend wpctl
-python3 ./g733_wheel_bridge.py --backend pactl
-python3 ./g733_wheel_bridge.py --sink @DEFAULT_AUDIO_SINK@
-python3 ./g733_wheel_bridge.py --handle-mute
-python3 ./g733_wheel_bridge.py --event /dev/input/eventX
-python3 ./g733_wheel_bridge.py --grab
-python3 ./g733_wheel_bridge.py --toggle-mic-mute
-python3 ./g733_wheel_bridge.py --mute-mic
-python3 ./g733_wheel_bridge.py --unmute-mic
+systemctl --user restart g733-wheel-bridge.service
 ```
 
-## Keybind Idea
+The installer does not overwrite an existing config file, so reinstalling will
+not reset your personal sensitivity settings.
 
-If someone wants mute on a mouse or keyboard shortcut, they can bind one of these commands:
+## Common Fixes
+
+If the service is missing:
+
+```bash
+bash ./install.sh --udev
+```
+
+If the service says it cannot read `/dev/input/eventX`, reinstall with the udev
+rule and reconnect the headset receiver:
+
+```bash
+bash ./install.sh --udev
+```
+
+If the wheel is detected but volume does not change, check that `wpctl` or
+`pactl` is installed:
+
+```bash
+command -v wpctl || command -v pactl
+```
+
+For detailed debugging, see [README_DEV.md](README_DEV.md).
+
+## Mic Mute Keybinds
+
+You can bind these commands to a keyboard or mouse shortcut:
 
 ```bash
 logi-g733-wheel-bridge --toggle-mic-mute
@@ -89,7 +104,8 @@ logi-g733-wheel-bridge --mute-mic
 logi-g733-wheel-bridge --unmute-mic
 ```
 
-That toggles the desktop microphone mute state. It does not guarantee the exact built-in Logitech headset mute tone, because that tone is likely generated by the headset firmware when the physical headset button is pressed.
+These control the desktop microphone mute state. They do not guarantee the
+headset firmware's built-in mute tone.
 
 ## Uninstall
 

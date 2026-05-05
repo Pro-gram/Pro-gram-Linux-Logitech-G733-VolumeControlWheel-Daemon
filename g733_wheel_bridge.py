@@ -22,8 +22,9 @@ ENV_PREFIX = "G733_WHEEL_"
 KEY_MUTE = 113
 KEY_VOLUMEDOWN = 114
 KEY_VOLUMEUP = 115
-DEFAULT_STEP = 0.08
+DEFAULT_STEP = 0.02
 DEFAULT_HANDLE_MUTE = False
+DEFAULT_MIN_INTERVAL_MS = 40.0
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
 
@@ -249,15 +250,18 @@ class G733WheelBridge:
         controller: AudioController | None,
         handle_mute: bool = DEFAULT_HANDLE_MUTE,
         grab: bool = False,
+        min_interval_ms: float = DEFAULT_MIN_INTERVAL_MS,
         verbose: bool = False,
     ) -> None:
         self.event_path = event_path
         self.controller = controller
         self.handle_mute = handle_mute
         self.grab = grab
+        self.min_interval_seconds = min_interval_ms / 1000
         self.verbose = verbose
         self._running = True
         self._event_struct = self._build_event_struct()
+        self._last_volume_event_by_code: dict[int, float] = {}
 
     def run(self) -> int:
         with self.event_path.open("rb", buffering=0) as device:
@@ -268,7 +272,8 @@ class G733WheelBridge:
                 if self.verbose:
                     print(
                         f"Listening on {self.event_path} with backend={self.controller.backend_name} "
-                        f"sink={self.controller.sink} handle_mute={self.handle_mute}",
+                        f"sink={self.controller.sink} handle_mute={self.handle_mute} "
+                        f"min_interval_ms={self.min_interval_seconds * 1000:.1f}",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -315,11 +320,27 @@ class G733WheelBridge:
             )
 
         if event.code == KEY_VOLUMEUP:
+            if self._should_skip_volume_event(event):
+                return
             self.controller.volume_up()
         elif event.code == KEY_VOLUMEDOWN:
+            if self._should_skip_volume_event(event):
+                return
             self.controller.volume_down()
         elif event.code == KEY_MUTE and self.handle_mute:
             self.controller.toggle_mute()
+
+    def _should_skip_volume_event(self, event: InputEvent) -> bool:
+        event_time = event.sec + (event.usec / 1_000_000)
+        last_event_time = self._last_volume_event_by_code.get(event.code)
+        if (
+            self.min_interval_seconds > 0
+            and last_event_time is not None
+            and event_time - last_event_time < self.min_interval_seconds
+        ):
+            return True
+        self._last_volume_event_by_code[event.code] = event_time
+        return False
 
     def _read_event(self, device) -> InputEvent | None:
         data = device.read(self._event_struct.size)
@@ -362,6 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
     default_event = read_env_text("EVENT")
     default_backend = read_env_choice("BACKEND", "auto", {"auto", *CONTROLLERS})
     default_step = read_env_float("STEP", DEFAULT_STEP)
+    default_min_interval_ms = read_env_float("MIN_INTERVAL_MS", DEFAULT_MIN_INTERVAL_MS)
     default_handle_mute = read_env_bool("HANDLE_MUTE", DEFAULT_HANDLE_MUTE)
     default_grab = read_env_bool("GRAB", False)
     default_device_name = read_env_text("DEVICE_NAME", DEVICE_NAME) or DEVICE_NAME
@@ -393,6 +415,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=default_step,
         help=f"Volume step per wheel notch. Default: {DEFAULT_STEP:.2f}.",
+    )
+    parser.add_argument(
+        "--min-interval-ms",
+        type=float,
+        default=default_min_interval_ms,
+        help=(
+            "Minimum time between volume changes for the same wheel direction. "
+            f"Use this to normalize bursty wheel events. Default: {DEFAULT_MIN_INTERVAL_MS:.0f}."
+        ),
     )
     parser.add_argument(
         "--sink",
@@ -465,6 +496,8 @@ def main() -> int:
 
     if args.step <= 0:
         parser.error("--step must be greater than 0.")
+    if args.min_interval_ms < 0:
+        parser.error("--min-interval-ms must be 0 or greater.")
 
     if args.toggle_mic_mute or args.mute_mic or args.unmute_mic:
         try:
@@ -501,6 +534,7 @@ def main() -> int:
                 controller=None,
                 handle_mute=args.handle_mute,
                 grab=args.grab,
+                min_interval_ms=args.min_interval_ms,
                 verbose=args.verbose,
             )
             return bridge.probe()
@@ -511,6 +545,7 @@ def main() -> int:
             controller=controller,
             handle_mute=args.handle_mute,
             grab=args.grab,
+            min_interval_ms=args.min_interval_ms,
             verbose=args.verbose,
         )
         return bridge.run()
